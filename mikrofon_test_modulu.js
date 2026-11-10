@@ -6,130 +6,170 @@ class VoiceMicCheck extends HTMLElement {
     this.stream = null;
     this.recorder = null;
     this.chunks = [];
-    this.transcriber = null;
+    this.model = null;
+    this.running = false;
+    this.startedAt = 0;
+    this.timer = null;
   }
 
   connectedCallback() {
     this.shadowRoot.innerHTML = `
       <style>
-        :host{display:block;width:100%;font-family:Arial,sans-serif;color:#172033}
-        *{box-sizing:border-box}
-        .panel{padding:22px;border:1px solid #dce3ed;border-radius:16px;background:#fff;max-width:760px;margin:auto}
-        h2{margin:0 0 8px;font-size:22px}
-        p{margin:0 0 16px;color:#5d6878;font-size:14px;line-height:1.55}
-        .status{padding:13px;border-radius:10px;background:#f1f5f9;color:#334155;font-size:14px;line-height:1.5;min-height:46px}
-        .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:15px}
-        button{border:0;border-radius:10px;padding:14px 18px;font-size:15px;font-weight:700;cursor:pointer}
-        button:disabled{opacity:.45;cursor:not-allowed}
-        #start{background:#166534;color:white}
-        #stop{background:#b91c1c;color:white}
-        .meta{margin-top:12px;color:#475569;font-size:13px;line-height:1.5}
-        .result{margin-top:16px;padding:14px;border:1px solid #dce3ed;border-radius:10px;background:#fbfdff}
-        .result h3{font-size:15px;margin:0 0 8px}
-        .transcript{white-space:pre-wrap;line-height:1.6;font-size:15px}
-        .hint{margin-top:14px;font-size:12px;color:#64748b;line-height:1.5}
-        .bar{height:7px;background:#e2e8f0;border-radius:99px;overflow:hidden;margin-top:12px}
-        .bar span{display:block;height:100%;width:0;background:#2563eb}
+        * { box-sizing: border-box; }
+        .app {
+          max-width: 720px; margin: auto; padding: 22px;
+          font-family: Arial, sans-serif; color: #202938;
+          background: white; border: 1px solid #e2e8f0;
+          border-radius: 16px;
+        }
+        h2 { margin-top: 0; }
+        .status {
+          padding: 13px; background: #f1f5f9;
+          border-radius: 9px; font-size: 14px;
+          line-height: 1.6; margin: 16px 0;
+        }
+        button {
+          border: 0; padding: 14px 20px; margin: 4px;
+          border-radius: 9px; font-size: 16px;
+          font-weight: bold; cursor: pointer;
+        }
+        #start { background: #16834b; color: white; }
+        #stop { background: #b91c1c; color: white; }
+        button:disabled { opacity: .4; cursor: not-allowed; }
+        .passage {
+          background: #f8fafc; padding: 17px;
+          border: 1px solid #e2e8f0; border-radius: 10px;
+          font-size: 18px; line-height: 1.8;
+        }
+        #transcript {
+          min-height: 110px; padding: 15px;
+          border: 1px solid #e2e8f0; border-radius: 10px;
+          line-height: 1.8; overflow-wrap: anywhere;
+        }
+        .stats {
+          display: grid; grid-template-columns: repeat(2,1fr);
+          gap: 10px; margin-top: 15px;
+        }
+        .stat { background: #f8fafc; padding: 13px; border-radius: 9px; }
+        .stat small { display: block; color: #64748b; margin-bottom: 7px; }
+        .stat strong { font-size: 22px; }
+        .good { color: #16834b; }
+        .bad { color: #dc3545; }
+        .missing { color: #d97706; }
+        .extra { color: #7c3aed; }
+        #analysis { line-height: 2; overflow-wrap: anywhere; }
+        @media(max-width:480px) {
+          .app { padding: 15px; }
+          .passage { font-size: 17px; }
+          button { width: 100%; margin: 5px 0; }
+        }
       </style>
-      <section class="panel">
-        <h2>Türkçe Ses Tanıma Testi</h2>
-        <p>Mikrofonu başlatın, kısa bir Türkçe cümle okuyun ve okumayı bitirin.</p>
-        <div class="status" id="status">Hazır. İlk kullanımda ses tanıma modeli indirilecektir.</div>
-        <div class="bar" id="bar" hidden><span id="progress"></span></div>
-        <div class="actions">
-          <button id="start" type="button">Okumayı Başlat</button>
-          <button id="stop" type="button" disabled>Okumayı Bitir</button>
+
+      <div class="app">
+        <h2>Türkçe Sesli Okuma Testi</h2>
+        <p>Metni sesli okuyun. Sesiniz cihazınızda işlenecektir.</p>
+
+        <div class="passage" id="passage">
+          Sağlıklı olmak için dengeli beslenmeli ve düzenli uyumalıyız.
+          Her gün hareket etmek, temiz hava almak ve bol su içmek
+          vücudumuz için önemlidir. Sağlıklı çocuklar oyun oynarken
+          ve ders çalışırken kendilerini daha iyi hissederler.
         </div>
-        <div class="meta" id="meta">İlk model indirmesi zaman alabilir.</div>
-        <section class="result" id="result" hidden>
-          <h3>Algılanan metin</h3>
-          <div class="transcript" id="transcript"></div>
-        </section>
-        <div class="hint">Ses cihazda çözümlenir. Ses oynatıcısı bulunmaz. Bu prototip henüz kelime hata puanlaması yapmaz.</div>
-      </section>`;
 
-    this.$status = this.shadowRoot.querySelector("#status");
-    this.$start = this.shadowRoot.querySelector("#start");
-    this.$stop = this.shadowRoot.querySelector("#stop");
-    this.$meta = this.shadowRoot.querySelector("#meta");
-    this.$result = this.shadowRoot.querySelector("#result");
-    this.$transcript = this.shadowRoot.querySelector("#transcript");
-    this.$bar = this.shadowRoot.querySelector("#bar");
-    this.$progress = this.shadowRoot.querySelector("#progress");
+        <div class="status" id="status">Model yükleniyor...</div>
 
-    this.$start.addEventListener("click", () => this.startRecording());
-    this.$stop.addEventListener("click", () => this.stopRecording());
+        <button id="start" disabled>Okumayı Başlat</button>
+        <button id="stop" disabled>Okumayı Bitir</button>
+
+        <h3>Algılanan konuşma</h3>
+        <div id="transcript">Henüz konuşma algılanmadı.</div>
+
+        <div class="stats">
+          <div class="stat"><small>Okuma süresi</small><strong id="duration">0 sn</strong></div>
+          <div class="stat"><small>Doğruluk</small><strong id="accuracy">-%</strong></div>
+          <div class="stat"><small>Doğru kelime</small><strong id="correct">0</strong></div>
+          <div class="stat"><small>Yanlış kelime</small><strong id="wrong">0</strong></div>
+          <div class="stat"><small>Atlanan kelime</small><strong id="skipped">0</strong></div>
+          <div class="stat"><small>Doğru kelime/dk</small><strong id="wpm">0</strong></div>
+        </div>
+
+        <h3>Kelime analizi</h3>
+        <div id="analysis">Henüz analiz yapılmadı.</div>
+      </div>
+    `;
+
+    this.$ = id => this.shadowRoot.getElementById(id);
+    this.$("start").addEventListener("click", () => this.startReading());
+    this.$("stop").addEventListener("click", () => this.stopReading());
+
+    this.loadModel();
   }
 
-  setStatus(text) {
-    this.$status.textContent = text;
+  normalize(text) {
+    return text.toLocaleLowerCase("tr-TR")
+      .replace(/[.,!?;:"“”()]/g, "")
+      .replace(/\s+/g, " ").trim();
   }
 
   async loadModel() {
-    if (this.transcriber) return this.transcriber;
+    try {
+      this.$("status").textContent = "Ses tanıma kütüphanesi yükleniyor...";
 
-    this.setStatus("Türkçe ses modeli indiriliyor...");
-    this.$bar.hidden = false;
+      const { pipeline, env } = await import(
+        "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2"
+      );
 
-    const { pipeline, env } = await import(
-      "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2"
-    );
+      env.allowLocalModels = false;
+      env.useBrowserCache = true;
 
-    env.allowLocalModels = false;
-    env.useBrowserCache = true;
+      this.$("status").textContent =
+        "Türkçe ses modeli indiriliyor. İlk yükleme uzun sürebilir...";
 
-    this.transcriber = await pipeline(
-      "automatic-speech-recognition",
-      "Xenova/whisper-tiny",
-      {
-        dtype: "q8",
-        progress_callback: event => {
-          if (typeof event?.progress === "number") {
-            this.$progress.style.width =
-              `${Math.min(100, event.progress)}%`;
-            if (event.file) {
-              this.$meta.textContent = `İndiriliyor: ${event.file}`;
-            }
-          }
-        }
-      }
-    );
+      this.model = await pipeline(
+        "automatic-speech-recognition",
+        "Xenova/whisper-base",
+        { dtype: "q8" }
+      );
 
-    this.setStatus("Ses modeli hazır.");
-    return this.transcriber;
+      this.$("status").textContent =
+        "Model hazır. Okumaya başlayabilirsiniz.";
+
+      this.$("start").disabled = false;
+    } catch (error) {
+      this.showError("Model yüklenemedi: " + error.message);
+    }
   }
 
-  async startRecording() {
-    if (!navigator.mediaDevices?.getUserMedia ||
-        !window.MediaRecorder) {
-      this.setStatus("Tarayıcı mikrofon kaydını desteklemiyor veya HTTPS gerekli.");
-      return;
-    }
+  async startReading() {
+    if (!this.model || this.running) return;
 
     try {
-      this.$start.disabled = true;
-      await this.loadModel();
+      this.$("start").disabled = true;
+      this.$("transcript").textContent = "";
+      this.$("analysis").textContent = "Okuma devam ediyor...";
+
+      this.$("status").textContent = "Mikrofon izni bekleniyor...";
 
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: {
+          channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true
         }
       });
 
-      this.chunks = [];
-
-      const formats = [
-        "audio/webm;codecs=opus",
+      const mimeTypes = [
         "audio/mp4",
-        "audio/webm",
-        "audio/ogg;codecs=opus"
+        "audio/webm;codecs=opus",
+        "audio/webm"
       ];
 
-      const mimeType = formats.find(
-        type => MediaRecorder.isTypeSupported(type)
+      const mimeType = mimeTypes.find(type =>
+        MediaRecorder.isTypeSupported(type)
       );
+
+      this.chunks = [];
 
       this.recorder = new MediaRecorder(
         this.stream,
@@ -137,167 +177,197 @@ class VoiceMicCheck extends HTMLElement {
       );
 
       this.recorder.ondataavailable = event => {
-        if (event.data?.size) this.chunks.push(event.data);
+        if (event.data && event.data.size > 0) {
+          this.chunks.push(event.data);
+        }
       };
 
-      this.recorder.onstop = () => this.transcribeRecording();
-
+      this.recorder.start();
       this.startedAt = Date.now();
-      this.recorder.start(500);
+      this.running = true;
 
-      this.$stop.disabled = false;
-      this.$result.hidden = true;
-      this.setStatus("Okuma başladı. Metni sesli okuyun.");
-      this.$meta.textContent = "Okumanız bitince Okumayı Bitir'e basın.";
+      this.$("start").disabled = true;
+      this.$("stop").disabled = false;
+
+      this.$("status").textContent =
+        "Mikrofon açık. Metni okumaya başlayabilirsiniz.";
+
+      this.timer = setInterval(() => {
+        this.$("duration").textContent =
+          Math.floor((Date.now() - this.startedAt) / 1000) + " sn";
+      }, 500);
 
     } catch (error) {
-      const messages = {
-        NotAllowedError: "Mikrofon izni reddedildi veya Wix iframe izni engelliyor.",
-        NotFoundError: "Mikrofon bulunamadı.",
-        NotReadableError: "Mikrofon başka bir uygulama tarafından kullanılıyor.",
-        SecurityError: "HTTPS veya mikrofon izinlerini kontrol edin."
-      };
-
-      this.setStatus(
-        messages[error.name] ||
-        `Başlatılamadı: ${error.message || error.name}`
-      );
-
-      this.$start.disabled = false;
-      this.$stop.disabled = true;
-      this.stopTracks();
+      this.showError("Mikrofon açılamadı: " + error.message);
+      this.cleanup();
+      this.$("start").disabled = false;
     }
   }
 
-  stopRecording() {
-    if (this.recorder && this.recorder.state !== "inactive") {
-      this.recorder.stop();
-      this.$stop.disabled = true;
-      this.setStatus("Konuşma metne dönüştürülüyor...");
-    }
-  }
+  async stopReading() {
+    if (!this.running) return;
 
-  async convertAudio(blob) {
-    const AudioContextClass =
-      window.AudioContext || window.webkitAudioContext;
-
-    if (!AudioContextClass) {
-      throw new Error("Ses çözümleme desteklenmiyor.");
-    }
-
-    const context = new AudioContextClass();
+    this.running = false;
+    clearInterval(this.timer);
+    this.$("stop").disabled = true;
+    this.$("status").textContent = "Ses kaydı hazırlanıyor...";
 
     try {
-      const decoded = await context.decodeAudioData(
+      await new Promise(resolve => {
+        this.recorder.onstop = resolve;
+        this.recorder.stop();
+      });
+
+      const blob = new Blob(this.chunks, {
+        type: this.recorder.mimeType || "audio/mp4"
+      });
+
+      if (!blob.size) {
+        throw new Error("Ses kaydı boş.");
+      }
+
+      this.$("status").textContent =
+        "Ses Türkçe modelle çözümleniyor...";
+
+      const audioContext = new (
+        window.AudioContext || window.webkitAudioContext
+      )();
+
+      const audioBuffer = await audioContext.decodeAudioData(
         await blob.arrayBuffer()
       );
 
-      const length = decoded.length;
-      const mono = new Float32Array(length);
-
-      for (let i = 0; i < length; i++) {
-        let sum = 0;
-
-        for (let c = 0; c < decoded.numberOfChannels; c++) {
-          sum += decoded.getChannelData(c)[i];
-        }
-
-        mono[i] = sum / decoded.numberOfChannels;
-      }
-
-      const outputLength = Math.max(
-        1,
-        Math.round(length * 16000 / decoded.sampleRate)
+      const input = audioBuffer.getChannelData(0);
+      const targetLength = Math.floor(
+        input.length * 16000 / audioBuffer.sampleRate
       );
 
-      const output = new Float32Array(outputLength);
-      const ratio = decoded.sampleRate / 16000;
+      const audio = new Float32Array(targetLength);
 
-      for (let i = 0; i < outputLength; i++) {
-        const position = i * ratio;
+      for (let i = 0; i < targetLength; i++) {
+        const position = i * audioBuffer.sampleRate / 16000;
         const left = Math.floor(position);
-        const right = Math.min(left + 1, length - 1);
+        const right = Math.min(left + 1, input.length - 1);
         const fraction = position - left;
 
-        output[i] =
-          mono[left] * (1 - fraction) +
-          mono[right] * fraction;
+        audio[i] =
+          input[left] * (1 - fraction) +
+          input[right] * fraction;
       }
 
-      return output;
-    } finally {
-      await context.close();
-    }
-  }
+      await audioContext.close();
 
-  async transcribeRecording() {
-    const duration = (Date.now() - this.startedAt) / 1000;
-
-    const blob = new Blob(this.chunks, {
-      type: this.recorder?.mimeType || "audio/webm"
-    });
-
-    this.stopTracks();
-    this.chunks = [];
-
-    this.$start.disabled = true;
-    this.setStatus("Ses cihazda çözümleniyor...");
-
-    try {
-      const audio = await this.convertAudio(blob);
-
-      const result = await this.transcriber(audio, {
+      const result = await this.model(audio, {
         language: "turkish",
-        task: "transcribe",
-        chunk_length_s: 30,
-        stride_length_s: 5
+        task: "transcribe"
       });
 
-      const text = (result?.text || "").trim();
+      const text = this.normalize(result.text || "");
 
-      this.$transcript.textContent =
-        text || "Konuşma algılanamadı. Tekrar deneyin.";
+      if (!text) {
+        throw new Error("Konuşma algılanamadı.");
+      }
 
-      this.$result.hidden = false;
+      this.$("transcript").textContent = text;
+      this.compare(text);
 
-      this.setStatus("Konuşma metne dönüştürüldü.");
-
-      this.$meta.textContent =
-        `Okuma süresi: ${duration.toFixed(1)} saniye · ` +
-        `Algılanan kelime: ${text ? text.trim().split(/\s+/).length : 0}`;
-
-      this.dispatchEvent(new CustomEvent(
-        "voice-transcription-complete",
-        {
-          detail: {
-            text,
-            durationSeconds: duration
-          },
-          bubbles: true,
-          composed: true
-        }
-      ));
+      this.$("status").textContent = "Analiz tamamlandı.";
 
     } catch (error) {
-      this.setStatus(
-        `Ses çözümlenemedi: ${error.message || error}`
-      );
+      this.showError("Ses çözümleme hatası: " + error.message);
     } finally {
-      this.$start.disabled = false;
-      this.$stop.disabled = true;
-      this.recorder = null;
+      this.cleanup();
+      this.$("start").disabled = false;
     }
   }
 
-  stopTracks() {
+  compare(text) {
+    const source = this.normalize(this.$("passage").textContent).split(" ");
+    const heard = this.normalize(text).split(" ");
+
+    const dp = Array.from(
+      { length: source.length + 1 },
+      () => Array(heard.length + 1).fill(0)
+    );
+
+    for (let i = 0; i <= source.length; i++) dp[i][0] = i;
+    for (let j = 0; j <= heard.length; j++) dp[0][j] = j;
+
+    for (let i = 1; i <= source.length; i++) {
+      for (let j = 1; j <= heard.length; j++) {
+        dp[i][j] = source[i - 1] === heard[j - 1]
+          ? dp[i - 1][j - 1]
+          : Math.min(
+              dp[i - 1][j] + 1,
+              dp[i][j - 1] + 1,
+              dp[i - 1][j - 1] + 1
+            );
+      }
+    }
+
+    let i = source.length;
+    let j = heard.length;
+    const operations = [];
+
+    while (i || j) {
+      if (i && j && source[i - 1] === heard[j - 1]) {
+        operations.unshift({ type: "good", word: source[i - 1] });
+        i--; j--;
+      } else if (i && j && dp[i][j] === dp[i - 1][j - 1] + 1) {
+        operations.unshift({ type: "bad", word: source[i - 1] });
+        i--; j--;
+      } else if (i && dp[i][j] === dp[i - 1][j] + 1) {
+        operations.unshift({ type: "missing", word: source[i - 1] });
+        i--;
+      } else {
+        operations.unshift({ type: "extra", word: heard[j - 1] });
+        j--;
+      }
+    }
+
+    const count = type =>
+      operations.filter(item => item.type === type).length;
+
+    const correct = count("good");
+    const wrong = count("bad");
+    const skipped = count("missing");
+    const extra = count("extra");
+
+    const seconds = Math.max(
+      1,
+      Math.round((Date.now() - this.startedAt) / 1000)
+    );
+
+    this.$("correct").textContent = correct;
+    this.$("wrong").textContent = wrong;
+    this.$("skipped").textContent = skipped;
+    this.$("accuracy").textContent =
+      Math.round(correct / source.length * 100) + "%";
+    this.$("wpm").textContent =
+      Math.round(correct * 60 / seconds);
+
+    this.$("analysis").innerHTML = operations.map(item =>
+      `<span class="${item.type}">${item.word}</span>`
+    ).join(" ") +
+      (extra
+        ? "<br>Fazladan kelimeler: " +
+          operations.filter(item => item.type === "extra")
+            .map(item => item.word).join(", ")
+        : "");
+  }
+
+  cleanup() {
     if (this.stream) {
       this.stream.getTracks().forEach(track => track.stop());
       this.stream = null;
     }
+
+    this.recorder = null;
   }
 
-  disconnectedCallback() {
-    this.stopTracks();
+  showError(message) {
+    this.$("status").textContent = message;
+    console.error(message);
   }
 }
 
