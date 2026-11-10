@@ -1,0 +1,263 @@
+
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Türkçe Canlı Ses Tanıma</title>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 20px;
+  background: #f4f6f9;
+  font-family: Arial, sans-serif;
+  color: #172033;
+}
+
+.panel {
+  max-width: 700px;
+  margin: 30px auto;
+  padding: 24px;
+  background: white;
+  border: 1px solid #dce3ed;
+  border-radius: 16px;
+}
+
+h2 { margin-top: 0; }
+
+.status {
+  padding: 13px;
+  background: #f1f5f9;
+  border-radius: 9px;
+  margin: 18px 0;
+  line-height: 1.5;
+}
+
+button {
+  padding: 14px 20px;
+  border: 0;
+  border-radius: 9px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+  margin: 5px;
+}
+
+#start { background: #166534; color: white; }
+#stop { background: #b91c1c; color: white; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+#transcript {
+  min-height: 150px;
+  padding: 16px;
+  background: #f8fafc;
+  border: 1px solid #dce3ed;
+  border-radius: 10px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.note {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+</style>
+</head>
+
+<body>
+
+<div class="panel">
+  <h2>Türkçe Canlı Ses Tanıma</h2>
+
+  <p class="note">
+    Mikrofonu başlatın ve Türkçe konuşun.
+    Söyledikleriniz anlık olarak metne dönüştürülecektir.
+  </p>
+
+  <div class="status" id="status">
+    Ses tanıma modeli yükleniyor...
+  </div>
+
+  <button id="start" disabled>Okumayı Başlat</button>
+  <button id="stop" disabled>Okumayı Bitir</button>
+
+  <h3>Algılanan Konuşma</h3>
+  <div id="transcript">Henüz konuşma algılanmadı.</div>
+
+  <p class="note">
+    Bu testte ses kaydı saklanmaz ve ses oynatma özelliği bulunmaz.
+  </p>
+</div>
+
+<script src="./vosk.js"></script>
+
+<script>
+const statusBox = document.getElementById("status");
+const transcriptBox = document.getElementById("transcript");
+const startButton = document.getElementById("start");
+const stopButton = document.getElementById("stop");
+
+let model = null;
+let recognizer = null;
+let stream = null;
+let audioContext = null;
+let processor = null;
+let source = null;
+let silentGain = null;
+let finalText = "";
+
+function status(message) {
+  statusBox.textContent = message;
+}
+
+async function loadModel() {
+  try {
+    if (!window.Vosk) {
+      throw new Error("vosk.js dosyası yüklenemedi.");
+    }
+
+    status("Türkçe ses modeli yükleniyor...");
+
+    model = await Vosk.createModel("./model.tar.gz");
+
+    status("Model hazır. Okumaya başlayabilirsiniz.");
+    startButton.disabled = false;
+
+  } catch (error) {
+    console.error(error);
+    status("Model yüklenemedi: " + error.message);
+  }
+}
+
+async function startReading() {
+  try {
+    startButton.disabled = true;
+    status("Mikrofon izni bekleniyor...");
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        channelCount: 1
+      },
+      video: false
+    });
+
+    audioContext = new (
+      window.AudioContext || window.webkitAudioContext
+    )();
+
+    await audioContext.resume();
+
+    recognizer = new model.KaldiRecognizer();
+
+    finalText = "";
+    transcriptBox.textContent = "";
+
+    recognizer.on("result", (message) => {
+      const text = message.result.text || "";
+
+      if (text.trim()) {
+        finalText += text + " ";
+        transcriptBox.textContent = finalText;
+      }
+    });
+
+    recognizer.on("partialresult", (message) => {
+      const partial = message.result.partial || "";
+
+      transcriptBox.textContent =
+        finalText + partial;
+    });
+
+    source = audioContext.createMediaStreamSource(stream);
+
+    processor = audioContext.createScriptProcessor(
+      4096, 1, 1
+    );
+
+    silentGain = audioContext.createGain();
+    silentGain.gain.value = 0;
+
+    processor.onaudioprocess = (event) => {
+      if (!recognizer) return;
+
+      try {
+        recognizer.acceptWaveform(event.inputBuffer);
+      } catch (error) {
+        console.error("Ses işleme hatası:", error);
+      }
+    };
+
+    source.connect(processor);
+    processor.connect(silentGain);
+    silentGain.connect(audioContext.destination);
+
+    startButton.disabled = true;
+    stopButton.disabled = false;
+
+    status("Mikrofon açık. Konuşmanız anlık algılanıyor.");
+
+  } catch (error) {
+    console.error(error);
+    status("Başlatma hatası: " + error.message);
+    startButton.disabled = false;
+    stopButton.disabled = true;
+    cleanup();
+  }
+}
+
+function cleanup() {
+  if (processor) {
+    processor.disconnect();
+    processor.onaudioprocess = null;
+    processor = null;
+  }
+
+  if (source) {
+    source.disconnect();
+    source = null;
+  }
+
+  if (silentGain) {
+    silentGain.disconnect();
+    silentGain = null;
+  }
+
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+    stream = null;
+  }
+
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+  }
+
+  if (recognizer) {
+    recognizer.remove();
+    recognizer = null;
+  }
+}
+
+function stopReading() {
+  cleanup();
+
+  stopButton.disabled = true;
+  startButton.disabled = false;
+
+  status("Okuma tamamlandı.");
+}
+
+startButton.addEventListener("click", startReading);
+stopButton.addEventListener("click", stopReading);
+
+loadModel();
+</script>
+
+</body>
+</html>
