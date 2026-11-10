@@ -1,0 +1,27 @@
+
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mikrofon Testi</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #f5f7fb;
+      font-family: Arial, sans-serif;
+    }
+    main {
+      max-width: 760px;
+      margin: 30px auto;
+    }
+  </style>
+  <script src="./mikrofon_test_modulu.js" defer></script>
+</head>
+<body>
+  <main>
+    <voice-mic-check></voice-mic-check>
+  </main>
+</body>
+</html>
